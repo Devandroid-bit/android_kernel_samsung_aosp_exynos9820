@@ -79,8 +79,8 @@ jobs:
       # checkout grabs only the one directory we need instead of everything.
       - name: Clone AOSP clang toolchain
         run: |
-          # On ajoute "-b master" pour forcer la branche qui contient tout l'historique
-          git clone --filter=blob:none --no-checkout --depth=1 -b master \
+          # On cible la branche "main" qui contient les versions récentes comme r563880c (Clang 21)
+          git clone --filter=blob:none --no-checkout --depth=1 -b main \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 "$HOME/toolchain"
           cd "$HOME/toolchain"
           git sparse-checkout init --cone
@@ -88,7 +88,6 @@ jobs:
           git checkout HEAD
           if [ ! -x "clang-${{ inputs.clang_version }}/bin/clang" ]; then
             echo "::error::clang-${{ inputs.clang_version }} not found. Versions in this repo:"
-            # On corrige aussi le FETCH_HEAD résiduel ici pour le log d'erreur
             git ls-tree -d --name-only HEAD | grep '^clang-' || true
             exit 1
           fi
