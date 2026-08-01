@@ -119,25 +119,6 @@ jobs:
             STRIP="${CLANG_DIR}/llvm-strip" CROSS_COMPILE="${CROSS_COMPILE}" \
             ${{ inputs.extra_make_args }} "${{ inputs.defconfig }}"
 
-      # This tree's stack-protector-strong probe invokes clang without a
-      # --target flag, so it checks the wrong architecture and always reports
-      # "not supported" even though clang genuinely supports the flag - a
-      # sibling Exynos tree hit the identical error (see
-      # github.com/exynos-linux-stable/crownlte/issues/9). Toggling it off in
-      # the generated .config sidesteps the broken check rather than patching
-      # the Makefile.
-      - name: Disable broken stack-protector-strong probe
-        env:
-          ANDROID_MAJOR_VERSION: ${{ inputs.android_major_version }}
-        run: |
-          scripts/config --file "${OUT_DIR}/.config" --disable CC_STACKPROTECTOR_STRONG
-          make -j"$(nproc)" O="${OUT_DIR}" ARCH="${ARCH}" LLVM=1 LLVM_IAS=1 \
-            CC="ccache ${CLANG_BIN}" LD="${CLANG_DIR}/ld.lld" \
-            AR="${CLANG_DIR}/llvm-ar" NM="${CLANG_DIR}/llvm-nm" \
-            OBJCOPY="${CLANG_DIR}/llvm-objcopy" OBJDUMP="${CLANG_DIR}/llvm-objdump" \
-            STRIP="${CLANG_DIR}/llvm-strip" CROSS_COMPILE="${CROSS_COMPILE}" \
-            olddefconfig
-
       - name: Build kernel
         env:
           ANDROID_MAJOR_VERSION: ${{ inputs.android_major_version }}
