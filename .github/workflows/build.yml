@@ -12,7 +12,7 @@ on:
       clang_version:
         description: "AOSP clang prebuilt version to use (matches what actually builds this tree - check the version banner on-device for the exact rXXXXXX build ID)"
         required: false
-        default: "r563880c"
+        default: "r547379"
       android_major_version:
         description: "ANDROID_MAJOR_VERSION some Samsung Makefiles require (e.g. p/q/r/s). Leave blank if unsure - the build will warn you in the log if it looks needed."
         required: false
@@ -79,7 +79,7 @@ jobs:
       # checkout grabs only the one directory we need instead of everything.
       - name: Clone AOSP clang toolchain
         run: |
-          # On cible la branche "main" qui contient les versions récentes comme r563880c (Clang 21)
+          # On cible la branche "main" qui contient les versions récentes comme r547379 (Clang 19)
           git clone --filter=blob:none --no-checkout --depth=1 -b main \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 "$HOME/toolchain"
           cd "$HOME/toolchain"
