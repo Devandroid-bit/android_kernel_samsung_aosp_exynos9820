@@ -142,16 +142,13 @@ jobs:
         env:
           ANDROID_MAJOR_VERSION: ${{ inputs.android_major_version }}
         run: |
-         # Patch automatique de KernelSU sur le serveur pour ignorer l'erreur de Clang
-          find drivers/kernelsu -type f -name "Makefile" -exec sed -i '1s/^/ccflags-y += -Wno-error=misleading-indentation\n/' {} + || true
-          
           make -j"$(nproc)" O="${OUT_DIR}" ARCH="${ARCH}" LLVM=1 LLVM_IAS=1 \
             CC="ccache ${CLANG_BIN}" LD="${CLANG_DIR}/ld.lld" \
             AR="${CLANG_DIR}/llvm-ar" NM="${CLANG_DIR}/llvm-nm" \
             OBJCOPY="${CLANG_DIR}/llvm-objcopy" OBJDUMP="${CLANG_DIR}/llvm-objdump" \
             STRIP="${CLANG_DIR}/llvm-strip" CROSS_COMPILE="${CROSS_COMPILE}" \
+            KCFLAGS="-Wno-misleading-indentation -Wno-error=misleading-indentation" \
             ${{ inputs.extra_make_args }} 2>&1 | tee build.log
-            KCFLAGS="-Wno-misleading-indentation -Wno-error=misleading-indentation"
 
       - name: Verify Image was produced
         run: |
