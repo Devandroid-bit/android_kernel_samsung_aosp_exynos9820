@@ -1580,7 +1580,6 @@ static int exynos_tmu_probe(struct platform_device *pdev)
 
 #if defined(CONFIG_ECT)
 	exynos_tmu_parse_ect(data);
-	exynos_tmu_dts_override_trip_temps(data);
 #endif
 
 	data->num_probe = (readl(data->base + EXYNOS_TMU_REG_CONTROL1) >> EXYNOS_TMU_NUM_PROBE_SHIFT)
