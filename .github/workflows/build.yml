@@ -84,7 +84,7 @@ jobs:
           cd "$HOME/toolchain"
           git sparse-checkout init --cone
           git sparse-checkout set "clang-${{ inputs.clang_version }}"
-          git checkout FETCH_HEAD
+          git checkout HEAD
           if [ ! -x "clang-${{ inputs.clang_version }}/bin/clang" ]; then
             echo "::error::clang-${{ inputs.clang_version }} not found. Versions in this repo:"
             git ls-tree -d --name-only FETCH_HEAD | grep '^clang-' || true
