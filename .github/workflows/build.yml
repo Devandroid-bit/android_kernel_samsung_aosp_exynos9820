@@ -1,0 +1,227 @@
+name: Build Exynos982x AOSP Kernel
+
+# Manually triggered so CI minutes only get spent when you want them to.
+# Re-run with a different "defconfig" input to reuse this for d1, d2s, d2x, etc.
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "Defconfig name in arch/arm64/configs"
+        required: false
+        default: "exynos9820-d1x_defconfig"
+      clang_version:
+        description: "AOSP clang prebuilt version to use (matches what actually builds this tree - check the version banner on-device for the exact rXXXXXX build ID)"
+        required: false
+        default: "r563880c"
+      android_major_version:
+        description: "ANDROID_MAJOR_VERSION some Samsung Makefiles require (e.g. p/q/r/s). Leave blank if unsure - the build will warn you in the log if it looks needed."
+        required: false
+        default: ""
+      extra_make_args:
+        description: "Extra space-separated KEY=VALUE args appended to every make call"
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ARCH: arm64
+  OUT_DIR: out
+  KBUILD_BUILD_USER: devandroid
+  KBUILD_BUILD_HOST: github-actions
+  CROSS_COMPILE: aarch64-linux-gnu-
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Confirm defconfig exists
+        run: |
+          if [ ! -f "arch/arm64/configs/${{ inputs.defconfig }}" ]; then
+            echo "::error::arch/arm64/configs/${{ inputs.defconfig }} not found on this branch."
+            echo "Defconfigs available here:"
+            ls arch/arm64/configs
+            exit 1
+          fi
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            git curl zip unzip
+
+      - name: Work around missing libtinfo.so.5 (prebuilt clang needs it; modern Ubuntu doesn't ship it)
+        run: sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5
+
+      - name: Cache ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-${{ inputs.defconfig }}
+          max-size: 2G
+
+      # Cloning your device's ACTUAL toolchain, not a third-party one - your
+      # kernel's own version banner shows it was built with Google's AOSP
+      # clang (r563880c), not a community toolchain. This repo bundles every
+      # clang release Google has ever shipped in one tree, so a sparse
+      # checkout grabs only the one directory we need instead of everything.
+      - name: Clone AOSP clang toolchain
+        run: |
+          git clone --filter=blob:none --no-checkout --depth=1 \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 "$HOME/toolchain"
+          cd "$HOME/toolchain"
+          git sparse-checkout init --cone
+          git sparse-checkout set "clang-${{ inputs.clang_version }}"
+          git checkout master
+          if [ ! -x "clang-${{ inputs.clang_version }}/bin/clang" ]; then
+            echo "::error::clang-${{ inputs.clang_version }} not found. Versions in this repo:"
+            git ls-tree -d --name-only master | grep '^clang-' || true
+            exit 1
+          fi
+          {
+            echo "CLANG_DIR=$HOME/toolchain/clang-${{ inputs.clang_version }}/bin"
+            echo "CLANG_BIN=$HOME/toolchain/clang-${{ inputs.clang_version }}/bin/clang"
+          } >> "$GITHUB_ENV"
+
+      - name: Toolchain sanity check
+        run: |
+          "${CLANG_BIN}" --version
+          "${CLANG_DIR}/ld.lld" --version
+
+      - name: Warn if ANDROID_MAJOR_VERSION looks required
+        run: |
+          if grep -rq "ANDROID_MAJOR_VERSION" Makefile arch/arm64/Makefile 2>/dev/null && [ -z "${{ inputs.android_major_version }}" ]; then
+            echo "::warning::This tree references ANDROID_MAJOR_VERSION but the android_major_version input is empty. Common values are p/q/r/s - check the top-level Makefile if the build fails or the version string looks wrong."
+          fi
+
+      - name: Generate defconfig
+        env:
+          ANDROID_MAJOR_VERSION: ${{ inputs.android_major_version }}
+        run: |
+          make -j"$(nproc)" O="${OUT_DIR}" ARCH="${ARCH}" LLVM=1 LLVM_IAS=1 \
+            CC="ccache ${CLANG_BIN}" LD="${CLANG_DIR}/ld.lld" \
+            AR="${CLANG_DIR}/llvm-ar" NM="${CLANG_DIR}/llvm-nm" \
+            OBJCOPY="${CLANG_DIR}/llvm-objcopy" OBJDUMP="${CLANG_DIR}/llvm-objdump" \
+            STRIP="${CLANG_DIR}/llvm-strip" CROSS_COMPILE="${CROSS_COMPILE}" \
+            ${{ inputs.extra_make_args }} "${{ inputs.defconfig }}"
+
+      # This tree's stack-protector-strong probe invokes clang without a
+      # --target flag, so it checks the wrong architecture and always reports
+      # "not supported" even though clang genuinely supports the flag - a
+      # sibling Exynos tree hit the identical error (see
+      # github.com/exynos-linux-stable/crownlte/issues/9). Toggling it off in
+      # the generated .config sidesteps the broken check rather than patching
+      # the Makefile.
+      - name: Disable broken stack-protector-strong probe
+        env:
+          ANDROID_MAJOR_VERSION: ${{ inputs.android_major_version }}
+        run: |
+          scripts/config --file "${OUT_DIR}/.config" --disable CC_STACKPROTECTOR_STRONG
+          make -j"$(nproc)" O="${OUT_DIR}" ARCH="${ARCH}" LLVM=1 LLVM_IAS=1 \
+            CC="ccache ${CLANG_BIN}" LD="${CLANG_DIR}/ld.lld" \
+            AR="${CLANG_DIR}/llvm-ar" NM="${CLANG_DIR}/llvm-nm" \
+            OBJCOPY="${CLANG_DIR}/llvm-objcopy" OBJDUMP="${CLANG_DIR}/llvm-objdump" \
+            STRIP="${CLANG_DIR}/llvm-strip" CROSS_COMPILE="${CROSS_COMPILE}" \
+            olddefconfig
+
+      - name: Build kernel
+        env:
+          ANDROID_MAJOR_VERSION: ${{ inputs.android_major_version }}
+        run: |
+          make -j"$(nproc)" O="${OUT_DIR}" ARCH="${ARCH}" LLVM=1 LLVM_IAS=1 \
+            CC="ccache ${CLANG_BIN}" LD="${CLANG_DIR}/ld.lld" \
+            AR="${CLANG_DIR}/llvm-ar" NM="${CLANG_DIR}/llvm-nm" \
+            OBJCOPY="${CLANG_DIR}/llvm-objcopy" OBJDUMP="${CLANG_DIR}/llvm-objdump" \
+            STRIP="${CLANG_DIR}/llvm-strip" CROSS_COMPILE="${CROSS_COMPILE}" \
+            ${{ inputs.extra_make_args }} 2>&1 | tee build.log
+
+      - name: Verify Image was produced
+        run: |
+          ls -la "${OUT_DIR}/arch/arm64/boot/"
+          test -f "${OUT_DIR}/arch/arm64/boot/Image" || { echo "::error::No Image in output - check build.log"; exit 1; }
+
+      - name: Upload kernel image, dtb, dtbo
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.defconfig }}-${{ github.run_number }}
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dts/**/*.dtb
+            out/arch/arm64/boot/dtbo.img
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Image/dtb/dtbo alone can't be flashed - there's no ramdisk in a bare kernel
+      # source tree. AnyKernel3 sidesteps that: its installer unpacks the ramdisk
+      # that's ALREADY on your phone at flash time, swaps in the new kernel/dtb,
+      # and repacks - so it doesn't matter that CI has no matching donor boot.img.
+      - name: Clone AnyKernel3 template
+        run: git clone --depth=1 https://github.com/osm0sis/AnyKernel3 "$HOME/AnyKernel3"
+
+      - name: Write anykernel.sh for this device
+        run: |
+          cat > "$HOME/AnyKernel3/anykernel.sh" <<EOF
+          properties() { '
+          kernel.string=${{ inputs.defconfig }} - github-actions build
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          '; } # end properties
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          EOF
+
+      - name: Stage kernel + dtb/dtbo into AnyKernel3
+        run: |
+          cp "${OUT_DIR}/arch/arm64/boot/Image" "$HOME/AnyKernel3/Image"
+          [ -f "${OUT_DIR}/arch/arm64/boot/dtbo.img" ] && cp "${OUT_DIR}/arch/arm64/boot/dtbo.img" "$HOME/AnyKernel3/dtbo.img"
+          find "${OUT_DIR}/arch/arm64/boot/dts" -name '*.dtb' -exec cat {} + > "$HOME/AnyKernel3/dtb" 2>/dev/null || true
+          [ -s "$HOME/AnyKernel3/dtb" ] || rm -f "$HOME/AnyKernel3/dtb"
+
+      - name: Zip flashable AnyKernel3 package
+        run: |
+          cd "$HOME/AnyKernel3"
+          zip -r9 "$GITHUB_WORKSPACE/AnyKernel3-${{ inputs.defconfig }}.zip" . -x '.git/*' 'README.md' '*placeholder*'
+
+      - name: Upload flashable AnyKernel3 zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: AnyKernel3-${{ inputs.defconfig }}-${{ github.run_number }}
+          path: AnyKernel3-${{ inputs.defconfig }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-${{ github.run_number }}
+          path: build.log
+          if-no-files-found: warn
