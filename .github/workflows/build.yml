@@ -148,6 +148,7 @@ jobs:
             OBJCOPY="${CLANG_DIR}/llvm-objcopy" OBJDUMP="${CLANG_DIR}/llvm-objdump" \
             STRIP="${CLANG_DIR}/llvm-strip" CROSS_COMPILE="${CROSS_COMPILE}" \
             ${{ inputs.extra_make_args }} 2>&1 | tee build.log
+            KCFLAGS="-Wno-misleading-indentation -Wno-error=misleading-indentation"
 
       - name: Verify Image was produced
         run: |
